@@ -1,0 +1,8 @@
+ursina
+sounddevice
+numpy
+openai-whisper
+groq
+gtts
+pydub
+scipy
