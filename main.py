@@ -8,11 +8,12 @@ import time
 import os
 import pyttsx3
 import groq
+from queue import Queue
 
 # --- IMPORTANT SETUP ---
 # Replace with your actual Groq API key.
 # It is highly recommended to use environment variables for this.
-GROQ_API_KEY = "YOUR_GROQ_API_KEY_HERE"
+GROQ_API_KEY = "YOUR_GROQ_API"
 
 # --- GLOBAL VARIABLES & ENGINE SETUP ---
 app = Ursina(title="LLM Character Demo", borderless=False)
@@ -36,13 +37,15 @@ character = Entity(
 # Set up the camera
 EditorCamera(parent=character)
 
+# A queue to pass updates from the background thread to the main thread
+update_queue = Queue()
+
 # --- AUDIO & API PROCESSING FUNCTIONS ---
 
 # Function to record audio from the microphone
 def record_audio():
     """Records audio from the microphone for a set duration."""
-    global status_text
-    status_text.text = "Listening..."
+    update_queue.put(("status", "Listening..."))
     
     # Recording parameters
     samplerate = 16000
@@ -60,11 +63,10 @@ def record_audio():
 # Function to transcribe audio using Groq's Whisper API
 def transcribe_audio_with_groq(file_path):
     """Transcribes an audio file to text using the Groq Whisper API."""
-    global status_text, user_prompt_text
-    status_text.text = "Transcribing..."
+    update_queue.put(("status", "Transcribing..."))
     
     if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
-        status_text.text = "Error: Please set your Groq API key in the code."
+        update_queue.put(("status", "Error: Please set your Groq API key in the code."))
         return None
 
     client = groq.Groq(api_key=GROQ_API_KEY)
@@ -77,10 +79,10 @@ def transcribe_audio_with_groq(file_path):
                 response_format="json",
             )
             transcript_text = transcription.text
-            user_prompt_text.text = f"You: {transcript_text}"
+            update_queue.put(("user_prompt", f"You: {transcript_text}"))
             return transcript_text
     except Exception as e:
-        status_text.text = f"Transcription Error: {e}"
+        update_queue.put(("status", f"Transcription Error: {e}"))
         print(f"Transcription Error: {e}")
         return None
     finally:
@@ -89,11 +91,10 @@ def transcribe_audio_with_groq(file_path):
 # Function to get a response from the Groq LLM
 def get_groq_response(prompt):
     """Gets a chat completion from the Groq API."""
-    global status_text, llm_response_text
-    status_text.text = "Thinking..."
+    update_queue.put(("status", "Thinking..."))
 
     if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
-        status_text.text = "Error: Please set your Groq API key in the code."
+        update_queue.put(("status", "Error: Please set your Groq API key in the code."))
         return "Sorry, I can't talk right now. My API key is missing!"
     
     client = groq.Groq(api_key=GROQ_API_KEY)
@@ -110,27 +111,27 @@ def get_groq_response(prompt):
                     "content": prompt
                 }
             ],
-            model="llama3-8b-8192"
+            # Updated to a currently supported model
+            model="llama-3.1-8b-instant"
         )
         response_text = chat_completion.choices[0].message.content
-        llm_response_text.text = f"Ursy: {response_text}"
+        update_queue.put(("llm_response", f"Ursy: {response_text}"))
         return response_text
     except Exception as e:
-        status_text.text = f"Groq API Error: {e}"
+        update_queue.put(("status", f"Groq API Error: {e}"))
         print(f"Groq API Error: {e}")
         return "I'm having trouble connecting to my brain right now. Please try again."
 
 # Function to convert text to speech and play it using pyttsx3
 def speak_text(text):
     """Converts text to speech and plays the audio using pyttsx3."""
-    global status_text
-    status_text.text = "Speaking..."
+    update_queue.put(("status", "Speaking..."))
     try:
         engine = pyttsx3.init()
         engine.say(text)
         engine.runAndWait()
     except Exception as e:
-        status_text.text = f"TTS Error: {e}"
+        update_queue.put(("status", f"TTS Error: {e}"))
         print(f"TTS Error: {e}")
 
 # Main conversation flow triggered by the button
@@ -143,20 +144,33 @@ def start_conversation():
 def process_conversation():
     audio_file_path = record_audio()
     if not audio_file_path:
-        mic_button.enable()
+        update_queue.put(("enable_button", True))
         return
         
     user_prompt = transcribe_audio_with_groq(audio_file_path)
     if not user_prompt:
-        mic_button.enable()
+        update_queue.put(("enable_button", True))
         return
 
     groq_response = get_groq_response(user_prompt)
     
     speak_text(groq_response)
     
-    status_text.text = "Conversation complete. Click the button to talk again!"
-    mic_button.enable()
+    update_queue.put(("status", "Conversation complete. Click the button to talk again!"))
+    update_queue.put(("enable_button", True))
+
+def update():
+    """The main Ursina update loop, handles thread-safe UI updates."""
+    if not update_queue.empty():
+        message_type, value = update_queue.get()
+        if message_type == "status":
+            status_text.text = value
+        elif message_type == "user_prompt":
+            user_prompt_text.text = value
+        elif message_type == "llm_response":
+            llm_response_text.text = value
+        elif message_type == "enable_button":
+            mic_button.enable()
 
 mic_button.on_click = start_conversation
 
