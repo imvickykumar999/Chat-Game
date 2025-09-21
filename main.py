@@ -5,22 +5,14 @@ import numpy as np
 import threading
 import tempfile
 import time
-import requests
-import json
 import os
-from pydub import AudioSegment
-from pydub.playback import play
-from gtts import gTTS
+import pyttsx3
 import groq
 
 # --- IMPORTANT SETUP ---
 # Replace with your actual Groq API key.
 # It is highly recommended to use environment variables for this.
-GROQ_API_KEY = "YOUR_GROQ_API"
-
-# Ensure you have the Groq Python SDK installed: pip install groq
-# And the OpenAI Whisper model: pip install openai-whisper
-# And other dependencies: pip install ursina sounddevice numpy pydub gtts
+GROQ_API_KEY = "YOUR_GROQ_API_KEY_HERE"
 
 # --- GLOBAL VARIABLES & ENGINE SETUP ---
 app = Ursina(title="LLM Character Demo", borderless=False)
@@ -33,7 +25,7 @@ mic_button = Button(text="Press to Talk", color=color.azure, scale=(.3, .1), y=-
 
 # Character entity
 character = Entity(
-    model="ursina_cube", # You can replace this with any other model like 'ursina_cube', 'sphere', 'plane' or a custom one.
+    model="ursina_cube", 
     color=color.blue,
     scale=1,
     y=0,
@@ -53,42 +45,45 @@ def record_audio():
     status_text.text = "Listening..."
     
     # Recording parameters
-    samplerate = 16000  # Whisper requires 16000 Hz
-    duration = 5  # seconds
+    samplerate = 16000
+    duration = 5
     
-    # The microphone input is a blocking operation, so it must be run on a separate thread
     recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
     sd.wait()
     
-    # Save the recorded audio to a temporary file
     temp_audio_file = tempfile.mktemp(suffix=".wav")
     from scipy.io.wavfile import write
     write(temp_audio_file, samplerate, recording)
     
     return temp_audio_file
 
-# Function to transcribe audio using OpenAI's Whisper model
-def transcribe_audio(file_path):
-    """Transcribes an audio file to text using the Whisper model."""
+# Function to transcribe audio using Groq's Whisper API
+def transcribe_audio_with_groq(file_path):
+    """Transcribes an audio file to text using the Groq Whisper API."""
     global status_text, user_prompt_text
     status_text.text = "Transcribing..."
     
+    if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
+        status_text.text = "Error: Please set your Groq API key in the code."
+        return None
+
+    client = groq.Groq(api_key=GROQ_API_KEY)
+    
     try:
-        import whisper
-        # Load the tiny model as it's small and fast
-        model = whisper.load_model("tiny")
-        result = model.transcribe(file_path)
-        transcript = result["text"]
-        user_prompt_text.text = f"You: {transcript}"
-        return transcript
-    except ImportError:
-        status_text.text = "Error: Whisper not installed. Please install it with 'pip install openai-whisper'."
+        with open(file_path, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(file_path), file.read()),
+                model="whisper-large-v3",
+                response_format="json",
+            )
+            transcript_text = transcription.text
+            user_prompt_text.text = f"You: {transcript_text}"
+            return transcript_text
     except Exception as e:
         status_text.text = f"Transcription Error: {e}"
         print(f"Transcription Error: {e}")
         return None
     finally:
-        # Clean up the temporary audio file
         os.remove(file_path)
 
 # Function to get a response from the Groq LLM
@@ -115,7 +110,7 @@ def get_groq_response(prompt):
                     "content": prompt
                 }
             ],
-            model="llama3-8b-8192"  # You can choose a different model here
+            model="llama3-8b-8192"
         )
         response_text = chat_completion.choices[0].message.content
         llm_response_text.text = f"Ursy: {response_text}"
@@ -125,22 +120,15 @@ def get_groq_response(prompt):
         print(f"Groq API Error: {e}")
         return "I'm having trouble connecting to my brain right now. Please try again."
 
-# Function to convert text to speech and play it
+# Function to convert text to speech and play it using pyttsx3
 def speak_text(text):
-    """Converts text to speech and plays the audio."""
+    """Converts text to speech and plays the audio using pyttsx3."""
     global status_text
     status_text.text = "Speaking..."
     try:
-        tts = gTTS(text=text, lang='en')
-        temp_tts_file = tempfile.mktemp(suffix=".mp3")
-        tts.save(temp_tts_file)
-        
-        # Load and play the audio using pydub
-        sound = AudioSegment.from_mp3(temp_tts_file)
-        play(sound)
-        
-        # Clean up the temporary file
-        os.remove(temp_tts_file)
+        engine = pyttsx3.init()
+        engine.say(text)
+        engine.runAndWait()
     except Exception as e:
         status_text.text = f"TTS Error: {e}"
         print(f"TTS Error: {e}")
@@ -149,33 +137,27 @@ def speak_text(text):
 def start_conversation():
     mic_button.disable()
     
-    # Use a separate thread for the entire process to avoid freezing the Ursina app
     thread = threading.Thread(target=process_conversation)
     thread.start()
 
 def process_conversation():
-    # Step 1: Record audio
     audio_file_path = record_audio()
     if not audio_file_path:
         mic_button.enable()
         return
         
-    # Step 2: Transcribe audio
-    user_prompt = transcribe_audio(audio_file_path)
+    user_prompt = transcribe_audio_with_groq(audio_file_path)
     if not user_prompt:
         mic_button.enable()
         return
 
-    # Step 3: Get Groq response
     groq_response = get_groq_response(user_prompt)
-
-    # Step 4: Speak the response
+    
     speak_text(groq_response)
     
     status_text.text = "Conversation complete. Click the button to talk again!"
     mic_button.enable()
 
-# Attach the conversation function to the button
 mic_button.on_click = start_conversation
 
 app.run()
