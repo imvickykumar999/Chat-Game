@@ -10,10 +10,13 @@ import pyttsx3
 import groq
 from queue import Queue
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # --- IMPORTANT SETUP ---
 # Replace with your actual Groq API key.
 # It is highly recommended to use environment variables for this.
-GROQ_API_KEY = "YOUR_GROQ_API"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- GLOBAL VARIABLES & ENGINE SETUP ---
 app = Ursina(title="LLM Character Demo", borderless=False)
