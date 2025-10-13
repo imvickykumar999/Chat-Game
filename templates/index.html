@@ -13,14 +13,13 @@
             font-family: 'Inter', sans-serif;
             background-color: #0d1117; /* Dark background */
         }
-        .container {
-            max-width: 420px;
-        }
+        /* Removed fixed .container width for better responsiveness */
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-    <div id="app" class="container w-full bg-gray-800 p-6 rounded-xl shadow-2xl border border-blue-700/50">
+    <!-- Updated class for better mobile responsiveness: max-w-full on mobile, constrained on desktop -->
+    <div id="app" class="w-full max-w-md bg-gray-800 p-6 rounded-xl shadow-2xl border border-blue-700/50">
         <h1 class="text-3xl font-extrabold text-white mb-6 text-center">
             <span class="text-blue-400">Ursy</span> - Voice Assistant
         </h1>
@@ -51,7 +50,7 @@
                            bg-blue-600 hover:bg-blue-700 transition duration-300 
                            shadow-xl hover:shadow-2xl active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white">
                 <svg id="mic-icon" class="inline w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-8"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                <span>Press to Talk (Max 5s)</span>
+                <span>Press and Hold to Talk (Max 5s)</span>
             </button>
         </div>
         
@@ -87,7 +86,7 @@
 
         function enableButton() {
             micButton.disabled = false;
-            micButton.querySelector('span').textContent = 'Press to Talk (Max 5s)';
+            micButton.querySelector('span').textContent = 'Press and Hold to Talk (Max 5s)';
             updateStatus('Conversation complete. Click the button to talk again!');
         }
 
@@ -186,9 +185,16 @@
                 });
 
                 if (!response.ok) {
+                    // Attempt to read the error response as text, then parse the JSON error payload
                     const errorText = await response.text();
-                    const errorJson = JSON.parse(errorText); // Attempt to parse JSON error
-                    
+                    let errorJson;
+                    try {
+                        errorJson = JSON.parse(errorText);
+                    } catch (e) {
+                        // Fallback if the response isn't JSON (e.g., plain HTML error page)
+                        throw new Error(`Server returned status ${response.status} with error: ${errorText.substring(0, 100)}...`);
+                    }
+
                     let errorMessage = errorJson.error || `HTTP error! status: ${response.status}`;
                     
                     // Provide clearer message if Groq error is about file size
@@ -238,7 +244,8 @@
         }
 
 
-        // --- Event Listener ---
+        // --- Event Listener: The "Press and Hold" Logic ---
+        // This setup handles both mouse (click and hold) and touch (touch and hold) gestures.
         micButton.addEventListener('mousedown', startRecording);
         micButton.addEventListener('mouseup', stopRecording);
         
