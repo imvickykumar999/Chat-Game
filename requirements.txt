@@ -1,7 +1,9 @@
-ursina==8.1.1
+flask
+twilio
+groq
+python-dotenv
+ursina
 sounddevice
 numpy
 scipy
 pyttsx3
-groq
-python-dotenv

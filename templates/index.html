@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ursy Voice Assistant (Flask/Groq)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Dark background */
+        }
+        .container {
+            max-width: 420px;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div id="app" class="container w-full bg-gray-800 p-6 rounded-xl shadow-2xl border border-blue-700/50">
+        <h1 class="text-3xl font-extrabold text-white mb-6 text-center">
+            <span class="text-blue-400">Ursy</span> - Voice Assistant
+        </h1>
+
+        <!-- Status & Response Display -->
+        <div class="space-y-4 mb-8">
+            <div id="status-box" class="p-3 rounded-lg bg-gray-700 shadow-md">
+                <p id="status-text" class="text-sm font-semibold text-blue-300 transition duration-300">
+                    Click the button to start talking to Ursy!
+                </p>
+            </div>
+
+            <div id="user-prompt-box" class="p-3 rounded-lg bg-gray-900 shadow-inner min-h-[4rem]">
+                <p class="text-xs font-bold text-gray-500 mb-1">You said:</p>
+                <p id="user-prompt" class="text-base text-gray-200 italic"></p>
+            </div>
+
+            <div id="llm-response-box" class="p-3 rounded-lg bg-blue-900/30 border border-blue-500/50 shadow-lg min-h-[5rem]">
+                <p class="text-xs font-bold text-blue-400 mb-1">Ursy responds:</p>
+                <p id="llm-response" class="text-lg text-white font-medium"></p>
+            </div>
+        </div>
+
+        <!-- Microphone Button -->
+        <div class="flex justify-center">
+            <button id="mic-button" 
+                    class="w-full py-4 px-6 rounded-full font-bold text-lg 
+                           bg-blue-600 hover:bg-blue-700 transition duration-300 
+                           shadow-xl hover:shadow-2xl active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white">
+                <svg id="mic-icon" class="inline w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-8"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                <span>Press to Talk (Max 5s)</span>
+            </button>
+        </div>
+        
+    </div>
+
+    <script>
+        // DOM elements
+        const micButton = document.getElementById('mic-button');
+        const statusText = document.getElementById('status-text');
+        const userPromptEl = document.getElementById('user-prompt');
+        const llmResponseEl = document.getElementById('llm-response');
+
+        // State variables
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime = 0; // Track when recording started
+        
+        // Timer for recording (matching the 5s limit in the original Python script)
+        const MAX_RECORDING_DURATION = 5000; // 5 seconds
+        const MIN_RECORDING_DURATION = 500; // Minimum duration for valid audio: 500ms
+
+        // --- UI Update Functions ---
+        function updateStatus(text, color = 'text-blue-300') {
+            statusText.textContent = text;
+            statusText.className = `text-sm font-semibold ${color} transition duration-300`;
+        }
+
+        function disableButton() {
+            micButton.disabled = true;
+            micButton.querySelector('span').textContent = 'Processing...';
+        }
+
+        function enableButton() {
+            micButton.disabled = false;
+            micButton.querySelector('span').textContent = 'Press to Talk (Max 5s)';
+            updateStatus('Conversation complete. Click the button to talk again!');
+        }
+
+        // --- Audio Recording Functions (Client Side) ---
+
+        async function startRecording() {
+            if (isRecording) return;
+            isRecording = true;
+            audioChunks = [];
+            userPromptEl.textContent = '';
+            llmResponseEl.textContent = '';
+            
+            // Set start time immediately
+            recordingStartTime = Date.now(); 
+
+            micButton.classList.add('bg-red-600', 'animate-pulse');
+            micButton.querySelector('span').textContent = 'Recording...';
+            updateStatus('Listening...', 'text-red-400');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Use a common mimeType for broad compatibility
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' }); 
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    isRecording = false;
+                    micButton.classList.remove('bg-red-600', 'animate-pulse');
+                    micButton.classList.add('bg-blue-600');
+                    micButton.querySelector('span').textContent = 'Sending to Server...';
+                    
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    processAudio(audioBlob);
+
+                    // Stop microphone stream tracks
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                
+                // Set timeout to automatically stop recording after MAX_RECORDING_DURATION
+                setTimeout(() => {
+                    if (mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                }, MAX_RECORDING_DURATION);
+
+            } catch (error) {
+                console.error("Microphone access failed:", error);
+                updateStatus(`Error: Microphone access denied. (${error.name})`, 'text-yellow-500');
+                enableButton();
+                isRecording = false;
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                const elapsedTime = Date.now() - recordingStartTime;
+
+                if (elapsedTime < MIN_RECORDING_DURATION) {
+                    // Wait for the minimum duration before stopping
+                    const remainingTime = MIN_RECORDING_DURATION - elapsedTime;
+                    updateStatus(`Please hold for another ${Math.ceil(remainingTime)}ms...`, 'text-yellow-400');
+                    
+                    // Delay the stop to capture the minimum amount of audio
+                    setTimeout(() => {
+                        if (mediaRecorder.state === 'recording') {
+                             mediaRecorder.stop();
+                        }
+                    }, remainingTime);
+
+                } else {
+                    // Already recorded long enough, stop immediately
+                    mediaRecorder.stop();
+                }
+            }
+        }
+
+        // --- Server Interaction ---
+
+        async function processAudio(audioBlob) {
+            disableButton();
+            updateStatus('Transcribing and Thinking...', 'text-yellow-400');
+
+            const formData = new FormData();
+            // Use 'audio_file' as the key to match the Flask backend
+            formData.append('audio_file', audioBlob, 'recording.webm'); 
+
+            try {
+                const response = await fetch('/process_audio', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    const errorJson = JSON.parse(errorText); // Attempt to parse JSON error
+                    
+                    let errorMessage = errorJson.error || `HTTP error! status: ${response.status}`;
+                    
+                    // Provide clearer message if Groq error is about file size
+                    if (errorMessage.includes("Audio file is too short")) {
+                        errorMessage = "The recorded audio was still too short. Please speak immediately after pressing the button.";
+                    }
+                    
+                    throw new Error(errorMessage);
+                }
+
+                const data = await response.json();
+
+                // Update UI with transcript and response
+                userPromptEl.textContent = data.user_prompt;
+                llmResponseEl.textContent = data.llm_response;
+
+                // 4. Client-side TTS playback
+                speak(data.llm_response);
+
+            } catch (error) {
+                console.error('Fetch/Processing Error:', error);
+                llmResponseEl.textContent = `Error: ${error.message}`;
+                updateStatus('A critical error occurred.', 'text-red-500');
+                enableButton();
+            }
+        }
+        
+        // --- Client-Side Text-to-Speech (TTS) ---
+
+        function speak(text) {
+            updateStatus('Speaking...', 'text-green-400');
+            const utterance = new SpeechSynthesisUtterance(text);
+            
+            // Optional: Set a female voice for Ursy if available
+            // Note: Voices vary widely by browser/OS
+            utterance.onend = () => {
+                enableButton(); // Re-enable button after speaking is done
+            };
+            
+            utterance.onerror = (event) => {
+                console.error('SpeechSynthesisUtterance.onerror', event);
+                // If TTS fails, still re-enable the button
+                enableButton();
+            };
+
+            speechSynthesis.speak(utterance);
+        }
+
+
+        // --- Event Listener ---
+        micButton.addEventListener('mousedown', startRecording);
+        micButton.addEventListener('mouseup', stopRecording);
+        
+        // Handle touch events for mobile
+        micButton.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            startRecording();
+        });
+        micButton.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            stopRecording();
+        });
+
+    </script>
+</body>
+</html>
